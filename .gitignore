@@ -1,0 +1,31 @@
+# ==============================================================================
+# .gitignore - L&T E-Commerce Big Data Analytics and Recommendation System
+# ==============================================================================
+
+# Runtime Logs
+logs/
+*.log
+derby.log
+
+# Temporary & Scratch Files
+scratch/
+test-dynamic/
+*.tmp
+*.swp
+*~
+.DS_Store
+
+# Concurrency Locks
+*.lock
+/tmp/*.lock
+
+# Hive & Hadoop Generated Artifacts
+metastore_db/
+.hive-staging*
+reports/staging_*
+
+# Local Backups & Edit Snapshots
+*.bak
+*.bak*
+*.old
+*.orig

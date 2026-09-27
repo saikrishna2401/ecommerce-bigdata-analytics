@@ -1,0 +1,404 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# ecommerce - Main Entrypoint for E-Commerce Big Data Analytics
+# Block 1 Foundation + Block 2 Pipeline Orchestration (Pig on Tez -> Hive)
+# ==============================================================================
+
+set -Eeuo pipefail
+
+# Resolve project root directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PROJECT_ROOT="${SCRIPT_DIR}"
+
+# Source common utilities
+# shellcheck source=/dev/null
+source "${PROJECT_ROOT}/scripts/common.sh"
+
+# Initialize logging for this run
+init_logging "$@"
+
+# Initialize batch registry
+init_batch_registry
+
+# Parse command line arguments
+if [ $# -gt 0 ]; then
+    case "$1" in
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        --check)
+            run_check_mode
+            exit $?
+            ;;
+        --batch-status)
+            print_batch_registry
+            exit 0
+            ;;
+        -*)
+            echo "ERROR: Unknown option '$1'"
+            echo ""
+            show_help
+            exit 1
+            ;;
+        *)
+            # Allow passing input path as argument for non-interactive convenience
+            input_path="$1"
+            ;;
+    esac
+fi
+
+# ------------------------------------------------------------------------------
+# Foundation Health Checks
+# ------------------------------------------------------------------------------
+echo "========================================"
+echo "E-COMMERCE BIG DATA ANALYTICS"
+echo "============================="
+echo ""
+echo "Checking environment..."
+echo ""
+
+if verify_hadoop; then
+    echo "Hadoop:"
+    echo "[OK]"
+    echo ""
+else
+    echo "Hadoop:"
+    echo "[FAILED]"
+    echo ""
+    log "ERROR: Hadoop verification failed."
+    exit 1
+fi
+
+if verify_hdfs; then
+    echo "HDFS:"
+    echo "[OK]"
+    echo ""
+else
+    echo "HDFS:"
+    echo "[FAILED]"
+    echo ""
+    log "ERROR: HDFS verification failed."
+    exit 1
+fi
+
+if load_config; then
+    if verify_project_structure; then
+        echo "Project structure:"
+        echo "[OK]"
+        echo ""
+    else
+        echo "Project structure:"
+        echo "[FAILED]"
+        echo ""
+        log "ERROR: HDFS Project structure verification failed."
+        exit 1
+    fi
+    echo "Configuration:"
+    echo "[OK]"
+    echo ""
+else
+    echo "Configuration:"
+    echo "[FAILED]"
+    echo ""
+    log "ERROR: Configuration loading failed."
+    exit 1
+fi
+
+echo "========================================"
+echo ""
+
+# ------------------------------------------------------------------------------
+# Input Path Prompt (if not passed as argument)
+# ------------------------------------------------------------------------------
+if [ -z "${input_path:-}" ]; then
+    echo "Enter HDFS input path:"
+    echo ""
+    echo -n "> "
+    read -r input_path || true
+    if [ ! -t 0 ]; then
+        echo "${input_path:-}"
+    fi
+fi
+
+# Trim whitespace
+input_path="$(echo -n "${input_path:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+log "HDFS input path: '${input_path}'"
+
+# Validate input path existence
+if ! validate_hdfs_input "${input_path}"; then
+    exit 1
+fi
+
+# ------------------------------------------------------------------------------
+# Batch ID Detection & Validation
+# ------------------------------------------------------------------------------
+batch_id=""
+if batch_id="$(extract_batch_id "${input_path}")"; then
+    log "Batch ID detected from path: ${batch_id}"
+else
+    echo ""
+    echo "Could not detect batch ID from input path."
+    echo "Enter batch/week ID (e.g., 2026-W05):"
+    echo -n "> "
+    read -r batch_id || true
+    if [ ! -t 0 ]; then
+        echo "${batch_id:-}"
+    fi
+    batch_id="$(echo -n "${batch_id:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    if [ -z "${batch_id}" ]; then
+        echo "ERROR: Batch/week ID cannot be empty."
+        log "ERROR: Batch/week ID was empty."
+        exit 1
+    fi
+    # If entered e.g. 2026-W5 or 2026_w5, normalize it
+    if [[ "${batch_id}" =~ ^([0-9]{4})[-_]?[wW]([0-9]{1,2})$ ]]; then
+        _norm_y="${BASH_REMATCH[1]}"
+        _norm_w="${BASH_REMATCH[2]}"
+        batch_id="$(printf "%04d-W%02d" "$((10#$_norm_y))" "$((10#$_norm_w))")"
+        unset _norm_y _norm_w
+    fi
+fi
+
+# Strict batch ID validation (YYYY-WNN format)
+if ! validate_batch_id "${batch_id}"; then
+    echo "ERROR: Invalid batch ID '${batch_id}'. Expected format: YYYY-WNN (e.g., 2026-W05)."
+    log "ERROR: Invalid batch ID format: ${batch_id}"
+    exit 1
+fi
+
+# Concurrency Protection: Acquire exclusive execution lock for this batch (Fix 8)
+if ! acquire_batch_lock "${batch_id}"; then
+    exit 1
+fi
+trap 'release_batch_lock; log_exit_status $?' EXIT
+
+echo ""
+echo "HDFS input: ${input_path}"
+echo "Batch ID  : ${batch_id}"
+echo ""
+
+# ------------------------------------------------------------------------------
+# Batch Registry Check (Idempotency & Safety)
+# ------------------------------------------------------------------------------
+current_status="$(get_batch_status "${batch_id}")"
+clean_dir="${CLEAN_ROOT}/${batch_id}"
+reject_dir="${REJECT_ROOT}/${batch_id}"
+
+if [ "${current_status}" = "SUCCESS" ]; then
+    # Protect existing successful batch
+    if hdfs dfs -test -d "${clean_dir}" 2>>"${LOG_FILE}"; then
+        prev_end="$(get_batch_field "${batch_id}" 4)"
+        prev_in="$(get_batch_field "${batch_id}" 5)"
+        prev_clean="$(get_batch_field "${batch_id}" 6)"
+        prev_rej="$(get_batch_field "${batch_id}" 7)"
+        
+        echo "========================================"
+        echo "BATCH ALREADY PROCESSED"
+        echo "========================================"
+        echo "Batch ID       : ${batch_id}"
+        echo "Status         : SUCCESS"
+        echo "Completed at   : ${prev_end}"
+        echo "Input records  : ${prev_in}"
+        echo "Clean records  : ${prev_clean}"
+        echo "Rejected       : ${prev_rej}"
+        echo ""
+        echo "Clean data     : ${clean_dir}/"
+        echo "Reject data    : ${reject_dir}/"
+        echo "Hive Partition : ${HIVE_DATABASE}.${HIVE_TABLE} (batch_id='${batch_id}')"
+        echo "========================================"
+        echo "NOTICE: Batch '${batch_id}' has already been successfully processed. Skipping data cleaning & Hive loading."
+        log "Batch '${batch_id}' already processed. Checking reports."
+
+        # Check if Block 3 reports exist in HDFS
+        need_weekly=0
+        need_hist=0
+        need_rec=0
+        need_eval=0
+        if ! hdfs dfs -test -e "${WEEKLY_REPORT_ROOT}/${batch_id}/weekly_summary.txt" 2>>"${LOG_FILE}"; then need_weekly=1; fi
+        if ! hdfs dfs -test -e "${HISTORICAL_REPORT_ROOT}/historical_summary.txt" 2>>"${LOG_FILE}"; then need_hist=1; fi
+        if ! hdfs dfs -test -e "${RECOMMENDATION_ROOT}/${batch_id}/recommendations.txt" 2>>"${LOG_FILE}"; then need_rec=1; fi
+        if ! hdfs dfs -test -e "${EVALUATION_ROOT}/${batch_id}/evaluation.txt" 2>>"${LOG_FILE}"; then need_eval=1; fi
+
+        if [ "${need_weekly}" -eq 1 ] || [ "${need_hist}" -eq 1 ] || [ "${need_rec}" -eq 1 ] || [ "${need_eval}" -eq 1 ]; then
+            echo "Generating missing reports for batch '${batch_id}'..."
+            echo ""
+            if [ "${need_weekly}" -eq 1 ]; then
+                echo "========================================"
+                echo "STAGE 4: WEEKLY ANALYTICAL REPORT"
+                echo "========================================"
+                generate_weekly_report "${batch_id}"
+                echo "Weekly report: [OK]"
+                echo ""
+            fi
+            if [ "${need_hist}" -eq 1 ]; then
+                echo "========================================"
+                echo "STAGE 5: HISTORICAL ANALYTICS & TRENDS"
+                echo "========================================"
+                generate_historical_report
+                echo "Historical report: [OK]"
+                echo ""
+            fi
+            if [ "${need_rec}" -eq 1 ]; then
+                echo "========================================"
+                echo "STAGE 6: PRODUCT RECOMMENDATIONS"
+                echo "========================================"
+                generate_recommendations "${batch_id}"
+                echo "Recommendations: [OK]"
+                echo ""
+            fi
+            if [ "${need_eval}" -eq 1 ]; then
+                echo "========================================"
+                echo "STAGE 7: RECOMMENDATION EVALUATION"
+                echo "========================================"
+                generate_evaluation "${batch_id}"
+                echo "Evaluation: [OK]"
+                echo ""
+            fi
+        else
+            echo "All reports already exist in HDFS. Skipping report generation."
+            echo ""
+        fi
+
+        print_final_summary "${batch_id}"
+        exit 0
+    else
+        echo "========================================"
+        echo "ERROR: INCONSISTENT BATCH STATE DETECTED"
+        echo "========================================"
+        echo "Batch ID       : ${batch_id}"
+        echo "Registry Status: SUCCESS"
+        echo "Expected Clean : ${clean_dir}"
+        echo ""
+        echo "The registry indicates this batch was already successfully processed,"
+        echo "but the expected clean output directory is missing or unavailable in HDFS."
+        echo "To prevent accidental data loss or corruption, processing has stopped."
+        echo "Please verify HDFS status or resolve the inconsistency before proceeding."
+        echo "========================================"
+        log_error "Batch '${batch_id}' is marked SUCCESS in registry, but '${clean_dir}' is missing in HDFS. Aborting execution."
+        exit 1
+    fi
+elif [ "${current_status}" = "RUNNING" ]; then
+    echo "NOTICE: A previous execution for batch '${batch_id}' was marked as RUNNING. Proceeding with retry..."
+    log "Notice: Retrying previously RUNNING batch '${batch_id}'."
+elif [ "${current_status}" = "FAILED" ]; then
+    echo "NOTICE: Retrying previously FAILED batch '${batch_id}'..."
+    log "Notice: Retrying FAILED batch '${batch_id}'."
+fi
+
+# ------------------------------------------------------------------------------
+# Pipeline Stage 1: Register Batch Start
+# ------------------------------------------------------------------------------
+start_time="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+update_batch_status "${batch_id}" "${input_path}" "${start_time}" "-" "0" "0" "0" "RUNNING" "Processing started"
+
+# ------------------------------------------------------------------------------
+# Pipeline Stage 2: Pig Data Cleaning on Apache Tez
+# ------------------------------------------------------------------------------
+echo "========================================"
+echo "STAGE 1: PIG DATA CLEANING (ON TEZ)"
+echo "========================================"
+
+if ! run_pig_cleaning "${batch_id}" "${input_path}"; then
+    update_batch_status "${batch_id}" "${input_path}" "${start_time}" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "0" "0" "0" "FAILED" "Pig cleaning failed"
+    echo ""
+    echo "ERROR: Pig cleaning failed."
+    echo "Check execution log for details:"
+    echo "  ${LOG_FILE}"
+    exit 1
+fi
+
+echo "Pig cleaning on Tez: [OK]"
+echo ""
+
+# ------------------------------------------------------------------------------
+# Pipeline Stage 3: Record Counting & Quality Validation
+# ------------------------------------------------------------------------------
+echo "========================================"
+echo "STAGE 2: RECORD VALIDATION & AUDIT"
+echo "========================================"
+
+read -r input_count clean_count reject_count duplicate_count < <(count_batch_records "${batch_id}" "${input_path}")
+
+log "Audit counts: Input=${input_count}, Clean=${clean_count}, Reject=${reject_count}, Duplicate=${duplicate_count}"
+
+# Independent Record Accounting Verification (Fix 1)
+total_rejected=$(( reject_count + duplicate_count ))
+accounted_total=$(( clean_count + total_rejected ))
+if [ "${input_count}" -lt 0 ] || [ "${input_count}" -ne "${accounted_total}" ]; then
+    echo "========================================"
+    echo "ERROR: DATA LOSS / ACCOUNTING FAILURE"
+    echo "========================================"
+    echo "Raw input records : ${input_count}"
+    echo "Clean records     : ${clean_count}"
+    echo "Rejected records  : ${reject_count}"
+    echo "Duplicate records : ${duplicate_count}"
+    echo "Total accounted   : ${accounted_total}"
+    echo "Unaccounted diff  : $(( input_count - accounted_total )) record(s)"
+    echo "========================================"
+    log_error "DATA LOSS / ACCOUNTING FAILURE: Raw input records (${input_count}) != clean (${clean_count}) + rejected (${reject_count}) + duplicates (${duplicate_count}). Difference: $(( input_count - accounted_total ))"
+    update_batch_status "${batch_id}" "${input_path}" "${start_time}" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${input_count}" "${clean_count}" "${total_rejected}" "FAILED" "Record accounting failure: input (${input_count}) != clean (${clean_count}) + reject (${reject_count}) + dup (${duplicate_count})"
+    exit 1
+fi
+
+if [ "${clean_count}" -eq 0 ]; then
+    update_batch_status "${batch_id}" "${input_path}" "${start_time}" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${input_count}" "0" "${total_rejected}" "FAILED" "Zero clean records produced"
+    echo "ERROR: Clean record count is zero. All records rejected or input was empty."
+    echo "Check rejected records for diagnostics:"
+    echo "  ${reject_dir}/"
+    exit 1
+fi
+
+clean_percentage="0.00%"
+if [ "${input_count}" -gt 0 ]; then
+    clean_percentage="$(awk -v c="${clean_count}" -v i="${input_count}" 'BEGIN { printf "%.2f%%", (c/i)*100 }')"
+fi
+
+echo "Input records      : ${input_count}"
+echo "Accepted records   : ${clean_count}"
+echo "Rejected (invalid) : ${reject_count}"
+echo "Duplicate/excluded : ${duplicate_count}"
+echo "Total accounted    : ${accounted_total} (${clean_count} + ${reject_count} + ${duplicate_count})"
+echo "Clean %            : ${clean_percentage}"
+echo "Record audit: [OK]"
+echo ""
+
+# Persist audited record counts in registry
+update_batch_status "${batch_id}" "${input_path}" "${start_time}" "-" "${input_count}" "${clean_count}" "${total_rejected}" "RUNNING" "Record audit passed"
+
+
+# ------------------------------------------------------------------------------
+# Pipeline Stage 4: Hive Ingestion & Partition Verification
+# ------------------------------------------------------------------------------
+echo "========================================"
+echo "STAGE 3: HIVE PARTITION INGESTION"
+echo "========================================"
+
+if ! load_hive_partition "${batch_id}" "${clean_count}"; then
+    update_batch_status "${batch_id}" "${input_path}" "${start_time}" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${input_count}" "${clean_count}" "${total_rejected}" "FAILED" "Hive partition loading failed"
+    echo "ERROR: Hive partition loading failed."
+    exit 1
+fi
+
+echo "Hive partition: [OK] (${clean_count} records verified)"
+echo ""
+
+# ------------------------------------------------------------------------------
+# Pipeline Stage 5: Block 3 Reports & Final Completion (Fix 6)
+# ------------------------------------------------------------------------------
+# Run Block 3 Reports BEFORE marking SUCCESS
+if ! run_block3_reports "${batch_id}"; then
+    update_batch_status "${batch_id}" "${input_path}" "${start_time}" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${input_count}" "${clean_count}" "${total_rejected}" "FAILED" "Block 3 report generation failed"
+    echo "ERROR: Block 3 report generation failed."
+    exit 1
+fi
+
+# Only update registry to SUCCESS after all stages including reports succeed
+end_time="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+update_batch_status "${batch_id}" "${input_path}" "${start_time}" "${end_time}" "${input_count}" "${clean_count}" "${total_rejected}" "SUCCESS" "NONE"
+
+# Display Final Summary
+print_final_summary "${batch_id}"
+
+exit 0
+
