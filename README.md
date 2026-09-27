@@ -1,24 +1,23 @@
-# L&T E-Commerce Big Data Analytics and Product Recommendation System
+# E-Commerce Big Data Analytics and Product Recommendation System
 
 [![Hadoop 3.4.1](https://img.shields.io/badge/Hadoop-3.4.1-yellow?logo=apachehadoop)](https://hadoop.apache.org/)
 [![Hive 4.2.1](https://img.shields.io/badge/Hive-4.2.1-orange?logo=apachehive)](https://hive.apache.org/)
 [![Tez 0.10.5](https://img.shields.io/badge/Tez-0.10.5-blue)](https://tez.apache.org/)
 [![Pig 0.18.0](https://img.shields.io/badge/Pig-0.18.0-red)](https://pig.apache.org/)
-[![Kafka 4.3.1](https://img.shields.io/badge/Kafka-4.3.1-black?logo=apachekafka)](https://kafka.apache.org/)
-[![Status](https://img.shields.io/badge/Production-Verified-brightgreen)](#)
+[![Status](https://img.shields.io/badge/Verified-brightgreen)](#)
 
 ---
 
 ## 1. Executive Summary
 
-The **L&T E-Commerce Big Data Analytics and Product Recommendation System** is an enterprise-grade, distributed big data platform designed for high-throughput transactional data ingestion, cleaning, multi-dimensional business analytics, longitudinal trend forecasting, and market basket product recommendations.
+The **E-Commerce Big Data Analytics and Product Recommendation System** is a modular, batch-oriented big data analytics platform designed for transactional data ingestion, schema validation and cleaning, multi-dimensional business analytics, longitudinal trend forecasting, and market basket product recommendations.
 
-Engineered for strict academic and industrial rigor, the platform guarantees:
-- **Zero-Loss Accounting Invariant**: Raw Input = Clean Data + Rejected Records.
-- **Strict Idempotency & Safe Retryability**: Safe replay without duplicate rows, ghost files, or data contamination.
-- **Fail-Safe Orchestration**: Non-blocking atomic locks (`flock`), safe staging directories, and automated rollback.
-- **Enterprise Security**: Complete path-traversal prevention, strict regex-based batch identifiers (`YYYY-WNN`), and defense against shell injection.
-- **Production-Scale Verification**: Verified end-to-end on both edge test batches (500 records) and the full production dataset (**16,700 transactions**).
+Engineered for academic and analytical rigor, the platform implements:
+- **Dynamic Accounting Invariant**: $\text{Raw Input Records} = \text{Accepted Business Records} + \text{Rejected Invalid Records} + \text{Excluded Duplicate Records}$.
+- **Strict Idempotency & Safe Retryability**: Safe replay without duplicate rows or data contamination.
+- **Fail-Safe Orchestration**: Non-blocking atomic locks (`flock`), safe staging directories, and automated error handling.
+- **Security Hardening**: Path-traversal prevention, strict regex-based batch identifiers (`YYYY-WNN`), and defense against shell injection.
+- **End-to-End Verification**: Validated on the 16,700-record W05 reference dataset with verified zero unaccounted records.
 
 ---
 
@@ -29,9 +28,8 @@ Engineered for strict academic and industrial rigor, the platform guarantees:
 | **Hadoop HDFS** | 3.4.1 | Distributed raw, clean, reject, and report storage | Java 17 |
 | **Hadoop YARN** | 3.4.1 | Distributed resource negotiation & container scheduling | Java 17 |
 | **Apache Tez** | 0.10.5 | Directed Acyclic Graph (DAG) distributed compute engine | Java 17 |
-| **Apache Pig** | 0.18.0 | High-throughput schema validation and data hygiene ETL | Pig on Tez (Java 17) |
+| **Apache Pig** | 0.18.0 | Schema validation, data hygiene, and deduplication ETL | Pig on Tez (Java 17) |
 | **Apache Hive** | 4.2.1 | External partitioned analytics warehouse & SQL aggregations | Hive on Tez (Java 21) |
-| **Apache Kafka** | 4.3.1 | Event-streaming backbone architecture for real-time ingest | KRaft Mode (Java 17) |
 | **Bash Orchestrator**| 5.2 | Unified CLI with concurrency controls & automated rollback | Linux POSIX |
 
 ---
@@ -40,6 +38,8 @@ Engineered for strict academic and industrial rigor, the platform guarantees:
 
 ```text
 ~/ecommerce-bigdata-project/
+├── .gitignore                    # Excludes logs, runtime caches, and backup files
+├── README.md                     # System documentation and operational guide
 ├── ecommerce                     # Primary CLI and orchestration entrypoint
 ├── config/
 │   └── project.conf              # Central configuration (HDFS paths, thresholds, Hive DB)
@@ -47,23 +47,23 @@ Engineered for strict academic and industrial rigor, the platform guarantees:
 │   ├── architecture.md           # Detailed architectural specification & design patterns
 │   └── project-usage.md          # User operational runbook & troubleshooting guide
 ├── hive/
-│   └── (HQL analytical scripts)
-├── logs/                         # Execution logs timestamped per pipeline run
+│   ├── evaluation.sql            # Temporal holdout recommendation evaluation
+│   ├── historical_report.sql     # Longitudinal trends & WoW metrics
+│   ├── recommendations.sql       # Product association rule mining
+│   ├── setup_table.sql           # Hive table DDL
+│   ├── validation.sql            # Verification & duplicate audit queries
+│   └── weekly_report.sql         # Weekly analytics aggregation
 ├── pig/
-│   ├── clean_transactions.pig    # Pig Latin data hygiene, validation, and rejection ETL
-│   └── (Pig macros & test scripts)
-├── reports/
-│   ├── weekly/                   # Local staging for weekly business analytics
-│   ├── historical/               # Local staging for longitudinal trends & WoW growth
-│   ├── recommendations/          # Local staging for association rule mining
-│   └── evaluation/               # Local staging for holdout recommendation evaluation
+│   └── clean_transactions.pig    # Pig Latin data hygiene, validation, and deduplication ETL
 ├── scripts/
 │   ├── common.sh                 # Reusable shell functions, locks, and validation logic
 │   └── validate_hive.sh          # Cross-partition Hive data validation query suite
 ├── security/
-│   └── (Security audit controls)
+│   ├── audit.md                  # Comprehensive security audit report
+│   ├── findings.md               # Vulnerability findings & remediation tracking
+│   └── test-results.md           # Security regression test results
 └── state/
-    └── registry.tsv              # Append-only persistent batch audit log
+    └── registry.tsv              # Persistent batch audit log (2026-W05 verified baseline)
 ```
 
 ---
@@ -81,7 +81,7 @@ ANY RAW DATASET (/project-2/raw/<batch_id>/transactions.csv)
        └── Excluded Duplicate Records ──> /project-2/reject/<batch_id>/duplicates/
        │
        ▼
-[Apache Hive: External Partitioned Storage] (project2.ecommerce_transactions)
+[Apache Hive on Tez: External Partitioned Storage] (project2.ecommerce_transactions)
        │
        ├── Weekly Analytics Report     ──> /project-2/reports/weekly/<batch_id>/
        ├── Longitudinal Trends (WoW)   ──> /project-2/reports/historical/
@@ -113,7 +113,7 @@ Batch IDs must strictly conform to `YYYY-WNN` ($NN \in [01, 99]$):
 - **Partition Freshness & Auto-Sync**: The pipeline automatically synchronizes Hive metastore partitions with physical HDFS directories (`sync_hive_partitions`), cleanly dropping orphaned metastore references to avoid Hadoop `InvalidInputException` crashes.
 
 ### E. Longitudinal Analytics & Baseline Handling
-- A first-ever batch (e.g., `2026-W05`) is an initial enterprise ingestion where no prior historical data exists.
+- A first-ever batch (e.g., `2026-W05`) is an initial ingestion where no prior historical data exists.
 - The pipeline dynamically handles this baseline state: Week-over-Week (WoW) metrics display `N/A`, and the longitudinal report outputs a clear baseline notice without failing. Subsequent batches automatically compute full chronological WoW trends across all ingested weeks.
 
 ### F. Recommendation Engine & Edge-Case Handling
@@ -123,10 +123,6 @@ Batch IDs must strictly conform to `YYYY-WNN` ($NN \in [01, 99]$):
 ### G. Temporal Holdout Evaluation & Baseline Constraint
 - The evaluation engine validates recommendation rules against holdout orders in chronologically subsequent batches.
 - For an initial batch (e.g., `2026-W05`), no prior historical training batch exists. The evaluation report dynamically documents this as `Baseline / Warm-up (Insufficient historical training data)` without fabricating synthetic hit rates. For subsequent batches, association rules derived from prior weeks are evaluated against actual holdout orders.
-
-### H. Apache Kafka's Architectural Role
-- **Apache Kafka (4.3.1)** operates in KRaft mode as the distributed event-streaming backbone for real-time transaction ingestion from external frontends.
-- **Batch vs. Streaming Distinction**: Kafka serves as the continuous real-time ingestion layer landing events into HDFS `/project-2/raw/`. It is decoupled from, and not executed as part of, the scheduled batch ETL pipeline (`ecommerce` CLI orchestrating Pig on Tez and Hive).
 
 ---
 
@@ -181,14 +177,13 @@ All analytical products are automatically published to HDFS under `/project-2/re
 
 | Metric | Verified Production Value | Description / Source of Truth |
 | :--- | :--- | :--- |
-| **Batch ID** | `2026-W05` | Production demonstration batch |
+| **Batch ID** | `2026-W05` | Reference benchmark batch |
 | **Raw Records Ingested** | **16,700** | `/project-2/raw/2026-W05/transactions.csv` |
 | **Accepted Business Records** | **16,500** | `/project-2/clean/2026-W05` (100% parity with reference dataset) |
 | **Rejected Records (Invalid)** | **54** | `/project-2/reject/2026-W05/invalid` (Schema / math violations) |
 | **Excluded Duplicates** | **146** | `/project-2/reject/2026-W05/duplicates` (Secondary duplicate occurrences) |
-| **Accounting Invariant** | **16,700 = 16,500 + 54 + 146** | Exactly zero silent data loss |
+| **Accounting Invariant** | **16,700 = 16,500 + 54 + 146** | Verified reference accounting balance |
 | **Hive Table Records** | **16,500** | `project2.ecommerce_transactions` (`batch_id='2026-W05'`) |
 | **Distinct Order IDs** | **16,500** | Verified via `COUNT(DISTINCT order_id)` in Hive |
 | **Distinct Transaction IDs** | **16,500** | Verified via `COUNT(DISTINCT transaction_id)` in Hive |
 | **Pipeline Status** | **SUCCESS** | Exit Code `0` across all Stages 1 through 7 |
-

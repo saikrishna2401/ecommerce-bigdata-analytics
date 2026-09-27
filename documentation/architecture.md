@@ -2,7 +2,7 @@
 
 ## 1. System Overview
 
-The **E-Commerce Customer Purchase Analytics and Product Recommendation System** is designed for automated, robust, and scalable batch processing of e-commerce transaction data. The underlying infrastructure runs on an enterprise Ubuntu 24.04 LTS Big Data environment leveraging Apache Hadoop 3.4.1 (HDFS & YARN), Apache Hive 4.2.1, Apache Tez 0.10.5, and Apache Pig 0.18.0.
+The **E-Commerce Customer Purchase Analytics and Product Recommendation System** is designed for automated, robust, and scalable batch processing of e-commerce transaction data. The underlying infrastructure runs on an Ubuntu 24.04 LTS Big Data environment leveraging Apache Hadoop 3.4.1 (HDFS & YARN), Apache Hive 4.2.1, Apache Tez 0.10.5, and Apache Pig 0.18.0.
 
 ### Environment Specification
 - **Operating System**: Ubuntu 24.04 LTS (`data-lab`)
@@ -11,8 +11,7 @@ The **E-Commerce Customer Purchase Analytics and Product Recommendation System**
 - **Hive**: 4.2.1 (Running with Java 21)
 - **Tez Execution Engine**: 0.10.5
 - **Pig**: 0.18.0 (Running with Java 17)
-- **Kafka**: 4.3.1 (Infrastructure / Future real-time streaming event ingestion; batch ETL path is powered by Hadoop HDFS + Pig on Tez + Hive)
-- **Java Runtimes**: OpenJDK 17 (Default / Hadoop / Tez / Pig / Kafka), OpenJDK 21 (Hive)
+- **Java Runtimes**: OpenJDK 17 (Default / Hadoop / Tez / Pig), OpenJDK 21 (Hive)
 
 ---
 
