@@ -20,7 +20,8 @@ SELECT
     COUNT(DISTINCT customer_id) AS distinct_customers,
     COUNT(DISTINCT product_id) AS distinct_products,
     ROUND(SUM(total_amount) / COUNT(DISTINCT order_id), 2) AS avg_order_value,
-    COUNT(transaction_id) - COUNT(DISTINCT transaction_id) AS duplicate_tx_count
+    COUNT(transaction_id) - COUNT(DISTINCT transaction_id) AS duplicate_tx_count,
+    COUNT(DISTINCT transaction_id) AS distinct_transactions
 FROM __TABLE_NAME__
 WHERE batch_id = '__BATCH_ID__';
 

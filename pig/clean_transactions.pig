@@ -66,7 +66,7 @@ SPLIT trimmed INTO
         transaction_id != '' AND
         customer_id != '' AND
         product_id != '' AND
-        transaction_date != '' AND
+        (transaction_date matches '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$') AND
         (quantity_str matches '^[0-9]+$') AND ((int)quantity_str > 0) AND
         (unit_price_str matches '^[0-9]+(\\.[0-9]+)?$') AND ((double)unit_price_str > 0.0) AND
         (total_amount_str matches '^[0-9]+(\\.[0-9]+)?$') AND ((double)total_amount_str > 0.0) AND
@@ -121,11 +121,11 @@ clean_records = FOREACH best_with_rank GENERATE
     (double)unit_price_str AS unit_price:double,
     (double)total_amount_str AS total_amount:double,
     payment_method,
-    (customer_age_str matches '^[0-9]+$' ? (int)customer_age_str : null) AS customer_age:int,
+    (customer_age_str matches '^[0-9]+$' ? (int)customer_age_str : (int)null) AS customer_age:int,
     customer_gender,
     city,
     order_status,
-    (rating_str matches '^[0-9]+(\\.[0-9]+)?$' ? (double)rating_str : null) AS rating:double;
+    (rating_str matches '^[0-9]+(\\.[0-9]+)?$' ? (double)rating_str : (double)null) AS rating:double;
 
 -- Identify duplicate occurrences excluded from the final business dataset via LEFT OUTER JOIN on rank
 joined_for_dups = JOIN scored_valid BY rank_valid_raw LEFT OUTER, best_with_rank BY top_one::rank_valid_raw;

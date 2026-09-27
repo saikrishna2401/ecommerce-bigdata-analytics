@@ -1099,9 +1099,9 @@ generate_weekly_report() {
     # Parse sales overview
     local ov_file
     ov_file="$(find "${staging_dir}/sales_overview" -maxdepth 1 -type f ! -name '.*' | head -n 1)"
-    local tot_recs tot_qty tot_sales d_orders d_cust d_prod aov dup_tx
+    local tot_recs tot_qty tot_sales d_orders d_cust d_prod aov dup_tx d_tx
     if [ -n "${ov_file}" ] && [ -f "${ov_file}" ]; then
-        IFS=$'\t' read -r tot_recs tot_qty tot_sales d_orders d_cust d_prod aov dup_tx < "${ov_file}" || true
+        IFS=$'\t' read -r tot_recs tot_qty tot_sales d_orders d_cust d_prod aov dup_tx d_tx < "${ov_file}" || true
     fi
     tot_recs="${tot_recs:-0}"
     tot_qty="${tot_qty:-0}"
@@ -1111,6 +1111,7 @@ generate_weekly_report() {
     d_prod="${d_prod:-0}"
     aov="${aov:-0.00}"
     dup_tx="${dup_tx:-0}"
+    d_tx="${d_tx:-$tot_recs}"
 
     if [ -z "${r_end}" ] || [ "${r_end}" = "-" ]; then
         r_end="${r_start}"
@@ -1191,12 +1192,13 @@ In-Hive Duplicates: ${dup_tx} (Repeated transaction_id in clean table)
 --------------------------------------------------------------------------------
 2. SALES & TRANSACTION OVERVIEW
 --------------------------------------------------------------------------------
-Distinct Orders : ${d_orders}
-Unique Customers: ${d_cust}
-Unique Products : ${d_prod}
-Total Quantity  : ${tot_qty}
-Gross Sales     : ${CURRENCY_SYMBOL}${tot_sales}
-Avg Order Value : ${CURRENCY_SYMBOL}${aov} (Gross Sales / Distinct Orders)
+Distinct Orders       : ${d_orders}
+Distinct Transactions : ${d_tx}
+Unique Customers      : ${d_cust}
+Unique Products       : ${d_prod}
+Total Quantity        : ${tot_qty}
+Gross Sales           : ${CURRENCY_SYMBOL}${tot_sales}
+Avg Order Value       : ${CURRENCY_SYMBOL}${aov} (Gross Sales / Distinct Orders)
 
 --------------------------------------------------------------------------------
 3. CATEGORY ANALYSIS
@@ -1849,6 +1851,7 @@ print_final_summary() {
         content="$(hdfs dfs -cat "${weekly_txt}" 2>>"${LOG_FILE}" || true)"
         hive_recs="$(echo "${content}" | grep -E '^Clean Records' | head -n 1 | awk -F':' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')"
         orders="$(echo "${content}" | grep -E '^Distinct Orders' | head -n 1 | awk -F':' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')"
+        hive_tx="$(echo "${content}" | grep -E '^Distinct Transactions' | head -n 1 | awk -F':' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')"
         cust="$(echo "${content}" | grep -E '^Unique Customers' | head -n 1 | awk -F':' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')"
         prod="$(echo "${content}" | grep -E '^Unique Products' | head -n 1 | awk -F':' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')"
         qty="$(echo "${content}" | grep -E '^Total Quantity' | head -n 1 | awk -F':' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')"
@@ -1857,7 +1860,7 @@ print_final_summary() {
         hive_dups="$(echo "${content}" | grep -E '^In-Hive Duplicates' | head -n 1 | awk -F':' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' | awk '{print $1}')"
     fi
     hive_recs="${hive_recs:-$r_clean}"
-    hive_tx="${orders}"
+    hive_tx="${hive_tx:-$r_clean}"
     hive_dups="${hive_dups:-0}"
 
     local rec_cnt=0
@@ -1870,9 +1873,20 @@ print_final_summary() {
         fi
     fi
 
+    local clean_orders=""
+    if hdfs dfs -test -e "${CLEAN_ROOT}/${batch_id}" 2>>"${LOG_FILE}"; then
+        clean_orders="$(hdfs dfs -cat "${CLEAN_ROOT}/${batch_id}/part*" 2>>"${LOG_FILE}" | awk -F'\t' '{print $1}' | sort -u | grep -c . || true)"
+    fi
+
     local hive_val="FAIL"
-    if [ "${hive_recs}" = "${r_clean}" ] && [ "${orders}" = "${r_clean}" ]; then
-        hive_val="PASS"
+    if [ "${hive_recs}" = "${r_clean}" ] && [ "${hive_tx}" = "${r_clean}" ] && [ "${hive_dups}" = "0" ]; then
+        if [ -n "${clean_orders}" ] && [ "${clean_orders}" -gt 0 ]; then
+            if [ "${orders}" = "${clean_orders}" ]; then
+                hive_val="PASS"
+            fi
+        else
+            hive_val="PASS"
+        fi
     fi
 
     local hist_data_msg="Baseline / First Batch"
